@@ -41,13 +41,15 @@ export async function analyze(): Promise<void> {
         return;
     }
 
-    // person with most PRs (by author)
-    const prCountByAuthor = new Map<string, number>();
+    // person with most PRs (by assignee)
+    const prCountByAssignee = new Map<string, number>();
     for (const pr of all) {
-        const key = pr.author?.login ?? "unknown";
-        prCountByAuthor.set(key, (prCountByAuthor.get(key) || 0) + 1);
+        for (const assignee of pr.assignees) {
+            const key = assignee?.login ?? "unknown";
+            prCountByAssignee.set(key, (prCountByAssignee.get(key) || 0) + 1);
+        }
     }
-    const mostPRs = [...prCountByAuthor.entries()].sort((a, b) => b[1] - a[1])[0];
+    const mostPRs = [...prCountByAssignee.entries()].sort((a, b) => b[1] - a[1])[0];
 
     // person with most reviews (count APPROVED reviews filtered in fetch)
     const reviewCountByUser = new Map<string, number>();
