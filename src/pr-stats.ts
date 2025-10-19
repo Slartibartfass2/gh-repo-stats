@@ -1,20 +1,7 @@
 import { fetchCounts } from "./fetch";
 import { analyze } from "./analyze";
+import { loadOptions } from "./config";
 
-// ---------- Config (edit as needed) ----------
-const DEFAULT_USERS = ["Slartibartfass2", "Merseleo", "domienderle", "mowi12", "luca-schlecker"];
-
-const DEFAULT_REPOS = [
-    "SE-UUlm/snowballr-frontend",
-    "SE-UUlm/snowballr-mock-backend",
-    "SE-UUlm/snowballr-backend",
-    "SE-UUlm/snowballr-api",
-];
-
-const DEFAULT_SINCE = "2025-04-01";
-const DEFAULT_LIMIT = 200;
-
-// ---------- Small utilities ----------
 type Argv = {
     _: string[];
     [key: string]: string | boolean | string[];
@@ -36,10 +23,9 @@ function parseArgs(argv: string[]): Argv {
     return args;
 }
 
-// ---------- CLI wiring ----------
 function printHelp(): void {
     console.log(
-        `Usage: pr-stats <command> [options]\n\nCommands:\n  fetch               Fetch counts via gh and persist to JSON (update only on changes)\n  analyze             Analyze previously fetched JSON data\n\nOptions (for fetch):\n  --since YYYY-MM-DD  Since date for merged PRs (default: ${DEFAULT_SINCE})\n  --limit N           Max PRs to consider per query (default: ${DEFAULT_LIMIT})\n  --repos CSV         Comma-separated list of repos\n  --users CSV         Comma-separated list of users\n`
+        `Usage: pr-stats <command>\n\nCommands:\n  fetch               Fetch PR data via gh and write JSON per repo in stats/\n  analyze             Analyze previously fetched JSON data\n\nConfiguration:\n  Set environment variables (REPOS, USERS, SINCE, LIMIT). A .env file is supported.\n`
     );
 }
 
@@ -53,15 +39,13 @@ function printHelp(): void {
     }
 
     if (cmd === "fetch") {
-        const repos = ((argv.repos as string) ? String(argv.repos).split(",") : DEFAULT_REPOS)
-            .map((s) => s.trim())
-            .filter(Boolean);
-        const users = ((argv.users as string) ? String(argv.users).split(",") : DEFAULT_USERS)
-            .map((s) => s.trim())
-            .filter(Boolean);
-        const since = (argv.since as string) ? String(argv.since) : DEFAULT_SINCE;
-        const limit = (argv.limit as string) ? Number(argv.limit) : DEFAULT_LIMIT;
-        await fetchCounts({ repos, users, since, limit });
+        try {
+            const opts = loadOptions();
+            await fetchCounts(opts);
+        } catch (e: any) {
+            console.error(e.message || String(e));
+            process.exitCode = 1;
+        }
         return;
     }
 
