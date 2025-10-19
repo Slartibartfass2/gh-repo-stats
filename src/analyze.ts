@@ -4,6 +4,17 @@ import * as path from "path";
 import { PullRequest } from "./pr-data";
 
 type PRWithRepo = PullRequest & { __repo: string };
+type FileAgg = { additions: number; deletions: number; prs: number };
+type RepoBucket = {
+    prs: PRWithRepo[];
+    prCountByAssignee: Map<string, number>;
+    reviewCountByUser: Map<string, number>;
+    topAdd?: PRWithRepo;
+    topDel?: PRWithRepo;
+    topFiles?: PRWithRepo;
+    fileAgg: Map<string, FileAgg>;
+    topPair?: { users: string[]; count: number };
+};
 
 export async function analyze(): Promise<void> {
     const statsDir = path.resolve(process.cwd(), "stats");
@@ -70,7 +81,6 @@ export async function analyze(): Promise<void> {
     );
 
     // file with most changes
-    type FileAgg = { additions: number; deletions: number; prs: number };
     const fileAgg = new Map<string, FileAgg>();
     for (const pr of all) {
         const seenInThisPr = new Set<string>();
@@ -105,27 +115,108 @@ export async function analyze(): Promise<void> {
     const topPairEntry = [...pairCounts.entries()].sort((a, b) => b[1] - a[1])[0];
     const topPair = topPairEntry ? { users: topPairEntry[0].split("|"), count: topPairEntry[1] } : undefined;
 
-    // Output
+    // Per-repo aggregation
+    const byRepo = new Map<string, RepoBucket>();
+
+    for (const pr of all) {
+        let bucket = byRepo.get(pr.__repo);
+        if (!bucket) {
+            bucket = {
+                prs: [],
+                prCountByAssignee: new Map<string, number>(),
+                reviewCountByUser: new Map<string, number>(),
+                fileAgg: new Map<string, FileAgg>(),
+            } as RepoBucket;
+            byRepo.set(pr.__repo, bucket);
+        }
+        bucket.prs.push(pr);
+        // assignees count
+        for (const a of pr.assignees) {
+            const k = a?.login ?? "unknown";
+            bucket.prCountByAssignee.set(k, (bucket.prCountByAssignee.get(k) || 0) + 1);
+        }
+        // reviews count
+        for (const rv of pr.latestReviews || []) {
+            const k = rv.author?.login ?? "unknown";
+            bucket.reviewCountByUser.set(k, (bucket.reviewCountByUser.get(k) || 0) + 1);
+        }
+        // file agg
+        const seen = new Set<string>();
+        for (const f of pr.files || []) {
+            const k = f.path;
+            const cur = bucket.fileAgg.get(k) || { additions: 0, deletions: 0, prs: 0 };
+            cur.additions += f.additions || 0;
+            cur.deletions += f.deletions || 0;
+            if (!seen.has(k)) {
+                cur.prs += 1;
+                seen.add(k);
+            }
+            bucket.fileAgg.set(k, cur);
+        }
+        // tops
+        bucket.topAdd = !bucket.topAdd || pr.additions > bucket.topAdd.additions ? pr : bucket.topAdd;
+        bucket.topDel = !bucket.topDel || pr.deletions > bucket.topDel.deletions ? pr : bucket.topDel;
+        bucket.topFiles = !bucket.topFiles || pr.changedFiles > bucket.topFiles.changedFiles ? pr : bucket.topFiles;
+
+        byRepo.set(pr.__repo, bucket);
+    }
+
+    // Build Markdown report
+    const lines: string[] = [];
+    lines.push(`# Repository Stats\n`);
+    lines.push(`Generated: ${new Date().toISOString()}`);
+    lines.push("");
+    lines.push(`## Overall\n`);
+    if (mostPRs) lines.push(`- Most PRs: ${mostPRs[0]} (${mostPRs[1]})`);
+    if (mostReviews) lines.push(`- Most reviews: ${mostReviews[0]} (${mostReviews[1]})`);
+    const prLabel = (pr: PRWithRepo | PullRequest) => `${(pr as any).title} ([#${pr.number}](${pr.url}))`;
+    lines.push("");
+    lines.push(`### PRs with most changes\n`);
+    if (mostAdditions) lines.push(`- Additions: ${mostAdditions.additions} — ${prLabel(mostAdditions)}>`);
+    if (mostDeletions) lines.push(`- Deletions: ${mostDeletions.deletions} — ${prLabel(mostDeletions)}>`);
+    if (mostChangedFiles)
+        lines.push(`- Changed files: ${mostChangedFiles.changedFiles} — ${prLabel(mostChangedFiles)}>`);
+    lines.push("");
+    lines.push(`### Files with most changes\n`);
+    if (topByAdditions) lines.push(`- Additions: ${topByAdditions[0]} (${topByAdditions[1].additions})`);
+    if (topByDeletions) lines.push(`- Deletions: ${topByDeletions[0]} (${topByDeletions[1].deletions})`);
+    if (topByPRs) lines.push(`- Most PRs touching: ${topByPRs[0]} (${topByPRs[1].prs})`);
+    if (topPair) lines.push("");
+    if (topPair) lines.push(`### Top author-reviewer pair\n`);
+    if (topPair) lines.push(`- ${topPair.users[0]} & ${topPair.users[1]} (${topPair.count} reviews)`);
+
+    // Per-repo sections
+    lines.push("");
+    lines.push(`## By Repository\n`);
+    for (const [repo, bucket] of [...byRepo.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+        lines.push(`### ${repo}\n`);
+        lines.push(`- Total PRs: ${bucket.prs.length}`);
+        const topAssignee = [...bucket.prCountByAssignee.entries()].sort((a, b) => b[1] - a[1])[0];
+        const topReviewer = [...bucket.reviewCountByUser.entries()].sort((a, b) => b[1] - a[1])[0];
+        if (topAssignee) lines.push(`- Most PRs: ${topAssignee[0]} (${topAssignee[1]})`);
+        if (topReviewer) lines.push(`- Most reviews: ${topReviewer[0]} (${topReviewer[1]})`);
+        if (bucket.topAdd) lines.push(`- Most additions: ${bucket.topAdd.additions} — ${prLabel(bucket.topAdd)}`);
+        if (bucket.topDel) lines.push(`- Most deletions: ${bucket.topDel.deletions} — ${prLabel(bucket.topDel)}`);
+        if (bucket.topFiles)
+            lines.push(`- Most changed files: ${bucket.topFiles.changedFiles} — ${prLabel(bucket.topFiles)}`);
+        const fa = bucket.fileAgg;
+        const rAdd = [...fa.entries()].sort((a, b) => b[1].additions - a[1].additions)[0];
+        const rDel = [...fa.entries()].sort((a, b) => b[1].deletions - a[1].deletions)[0];
+        const rPRs = [...fa.entries()].sort((a, b) => b[1].prs - a[1].prs)[0];
+        if (rAdd) lines.push(`- File additions: ${rAdd[0]} (${rAdd[1].additions})`);
+        if (rDel) lines.push(`- File deletions: ${rDel[0]} (${rDel[1].deletions})`);
+        if (rPRs) lines.push(`- File PRs touching: ${rPRs[0]} (${rPRs[1].prs})`);
+        lines.push("");
+    }
+
+    // Write Stats.md
+    await fsp.mkdir(statsDir, { recursive: true });
+    const outPath = path.join(statsDir, "Stats.md");
+    await fsp.writeFile(outPath, lines.join("\n"), "utf8");
+
+    // Also print a short console summary
     console.log("\n=== Analysis ===");
     if (mostPRs) console.log(`Most PRs: ${mostPRs[0]} with ${mostPRs[1]} PRs`);
     if (mostReviews) console.log(`Most reviews: ${mostReviews[0]} with ${mostReviews[1]} approvals`);
-
-    const prLabel = (pr: PRWithRepo | PullRequest) => `${(pr as any).title} (#${pr.number})`;
-    console.log("\nPRs with most changes:");
-    if (mostAdditions)
-        console.log(`- Additions: ${mostAdditions.additions} in ${prLabel(mostAdditions)} ${mostAdditions.url}`);
-    if (mostDeletions)
-        console.log(`- Deletions: ${mostDeletions.deletions} in ${prLabel(mostDeletions)} ${mostDeletions.url}`);
-    if (mostChangedFiles)
-        console.log(
-            `- Changed files: ${mostChangedFiles.changedFiles} in ${prLabel(mostChangedFiles)} ${mostChangedFiles.url}`
-        );
-
-    console.log("\nFiles with most changes:");
-    if (topByAdditions) console.log(`- Additions: ${topByAdditions[0]} with ${topByAdditions[1].additions} additions`);
-    if (topByDeletions) console.log(`- Deletions: ${topByDeletions[0]} with ${topByDeletions[1].deletions} deletions`);
-    if (topByPRs) console.log(`- PRs touching: ${topByPRs[0]} in ${topByPRs[1].prs} PRs`);
-
-    if (topPair)
-        console.log(`\nTop author-reviewer pair: ${topPair.users[0]} & ${topPair.users[1]} (${topPair.count} reviews)`);
+    console.log(`Report written to: ${outPath}`);
 }
