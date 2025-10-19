@@ -64,13 +64,38 @@ export async function analyze(): Promise<void> {
 
     // person with most reviews (count APPROVED reviews filtered in fetch)
     const reviewCountByUser = new Map<string, number>();
+    // biggest reviews (by LOC additions+deletions) overall
+    const reviewLocTotalByUser = new Map<string, number>();
+    const reviewMaxLocByUser = new Map<string, { loc: number; pr: PRWithRepo }>();
     for (const pr of all) {
+        const prLoc = (pr.additions || 0) + (pr.deletions || 0);
+        const reviewersInThisPR = new Set<string>();
         for (const rv of pr.latestReviews || []) {
             const key = rv.author?.login ?? "unknown";
             reviewCountByUser.set(key, (reviewCountByUser.get(key) || 0) + 1);
+            // dedupe LOC accumulation per reviewer per PR
+            if (!reviewersInThisPR.has(key)) {
+                reviewersInThisPR.add(key);
+                reviewLocTotalByUser.set(key, (reviewLocTotalByUser.get(key) || 0) + prLoc);
+                const prev = reviewMaxLocByUser.get(key);
+                if (!prev || prLoc > prev.loc) reviewMaxLocByUser.set(key, { loc: prLoc, pr });
+            }
         }
     }
     const mostReviews = [...reviewCountByUser.entries()].sort((a, b) => b[1] - a[1])[0];
+    const biggestReviewerTotal = [...reviewLocTotalByUser.entries()].sort((a, b) => b[1] - a[1])[0];
+    const biggestReviewerSingle = [...reviewMaxLocByUser.entries()].sort((a, b) => b[1].loc - a[1].loc)[0];
+
+    // Biggest PRs total as assignee (overall, by LOC)
+    const assigneeLocTotalByUser = new Map<string, number>();
+    for (const pr of all) {
+        const prLoc = (pr.additions || 0) + (pr.deletions || 0);
+        for (const a of pr.assignees || []) {
+            const key = a?.login ?? "unknown";
+            assigneeLocTotalByUser.set(key, (assigneeLocTotalByUser.get(key) || 0) + prLoc);
+        }
+    }
+    const biggestAssigneeTotal = [...assigneeLocTotalByUser.entries()].sort((a, b) => b[1] - a[1])[0];
 
     // PR with most changes
     const mostAdditions = all.reduce<PRWithRepo>((max, pr) => (pr.additions > max.additions ? pr : max), all[0]!);
@@ -126,6 +151,10 @@ export async function analyze(): Promise<void> {
                 prCountByAssignee: new Map<string, number>(),
                 reviewCountByUser: new Map<string, number>(),
                 fileAgg: new Map<string, FileAgg>(),
+                // per-repo biggest reviews
+                // total LOC reviewed per user
+                // and max single-PR review per user
+                // We'll attach them dynamically
             } as RepoBucket;
             byRepo.set(pr.__repo, bucket);
         }
@@ -135,10 +164,23 @@ export async function analyze(): Promise<void> {
             const k = a?.login ?? "unknown";
             bucket.prCountByAssignee.set(k, (bucket.prCountByAssignee.get(k) || 0) + 1);
         }
-        // reviews count
+        // reviews count + biggest reviews per repo (by LOC)
+        const prLoc = (pr.additions || 0) + (pr.deletions || 0);
+        const seenReviewers = new Set<string>();
+        // lazy init maps on bucket as any additions
+        const anyBucket: any = bucket as any;
+        if (!anyBucket.reviewLocTotalByUser) anyBucket.reviewLocTotalByUser = new Map<string, number>();
+        if (!anyBucket.reviewMaxLocByUser)
+            anyBucket.reviewMaxLocByUser = new Map<string, { loc: number; pr: PRWithRepo }>();
         for (const rv of pr.latestReviews || []) {
             const k = rv.author?.login ?? "unknown";
             bucket.reviewCountByUser.set(k, (bucket.reviewCountByUser.get(k) || 0) + 1);
+            if (!seenReviewers.has(k)) {
+                seenReviewers.add(k);
+                anyBucket.reviewLocTotalByUser.set(k, (anyBucket.reviewLocTotalByUser.get(k) || 0) + prLoc);
+                const prev = anyBucket.reviewMaxLocByUser.get(k);
+                if (!prev || prLoc > prev.loc) anyBucket.reviewMaxLocByUser.set(k, { loc: prLoc, pr });
+            }
         }
         // file agg
         const seen = new Set<string>();
@@ -172,10 +214,10 @@ export async function analyze(): Promise<void> {
     const prLabel = (pr: PRWithRepo | PullRequest) => `${(pr as any).title} ([#${pr.number}](${pr.url}))`;
     lines.push("");
     lines.push(`### PRs with most changes\n`);
-    if (mostAdditions) lines.push(`- Additions: ${mostAdditions.additions} — ${prLabel(mostAdditions)}>`);
-    if (mostDeletions) lines.push(`- Deletions: ${mostDeletions.deletions} — ${prLabel(mostDeletions)}>`);
+    if (mostAdditions) lines.push(`- Additions: ${mostAdditions.additions} — ${prLabel(mostAdditions)}`);
+    if (mostDeletions) lines.push(`- Deletions: ${mostDeletions.deletions} — ${prLabel(mostDeletions)}`);
     if (mostChangedFiles)
-        lines.push(`- Changed files: ${mostChangedFiles.changedFiles} — ${prLabel(mostChangedFiles)}>`);
+        lines.push(`- Changed files: ${mostChangedFiles.changedFiles} — ${prLabel(mostChangedFiles)}`);
     lines.push("");
     lines.push(`### Files with most changes\n`);
     if (topByAdditions) lines.push(`- Additions: ${topByAdditions[0]} (${topByAdditions[1].additions})`);
@@ -184,6 +226,26 @@ export async function analyze(): Promise<void> {
     if (topPair) lines.push("");
     if (topPair) lines.push(`### Top author-reviewer pair\n`);
     if (topPair) lines.push(`- ${topPair.users[0]} & ${topPair.users[1]} (${topPair.count} reviews)`);
+
+    // Biggest reviews (overall)
+    lines.push("");
+    lines.push(`### Biggest reviews (overall by LOC)\n`);
+    if (biggestReviewerTotal)
+        lines.push(`- Largest total: ${biggestReviewerTotal[0]} (${biggestReviewerTotal[1]} LOC reviewed)`);
+    if (biggestReviewerSingle) {
+        const pr = biggestReviewerSingle[1].pr;
+        const assignees = (pr.assignees || []).map((a) => a?.login || "unknown");
+        const assigneesStr = assignees.length > 1 ? `Assignees: ${assignees.join(", ")}` : `Assignee: ${assignees[0]}`;
+        lines.push(
+            `- Largest single review: ${biggestReviewerSingle[0]} (${biggestReviewerSingle[1].loc} LOC, ${assigneesStr}) — ${prLabel(pr)}`
+        );
+    }
+
+    // Biggest PRs total as assignee (overall)
+    lines.push("");
+    lines.push(`### Biggest PRs total (assignee by LOC)\n`);
+    if (biggestAssigneeTotal)
+        lines.push(`- Largest total as assignee: ${biggestAssigneeTotal[0]} (${biggestAssigneeTotal[1]} LOC)`);
 
     // Per-repo sections
     lines.push("");
@@ -195,6 +257,18 @@ export async function analyze(): Promise<void> {
         const topReviewer = [...bucket.reviewCountByUser.entries()].sort((a, b) => b[1] - a[1])[0];
         if (topAssignee) lines.push(`- Most PRs: ${topAssignee[0]} (${topAssignee[1]})`);
         if (topReviewer) lines.push(`- Most reviews: ${topReviewer[0]} (${topReviewer[1]})`);
+        // Biggest PRs total as assignee (per repo)
+        const assigneeLocMap = new Map<string, number>();
+        for (const pr of bucket.prs) {
+            const prLoc = (pr.additions || 0) + (pr.deletions || 0);
+            for (const a of pr.assignees || []) {
+                const key = a?.login ?? "unknown";
+                assigneeLocMap.set(key, (assigneeLocMap.get(key) || 0) + prLoc);
+            }
+        }
+        const repoBiggestAssignee = [...assigneeLocMap.entries()].sort((a, b) => b[1] - a[1])[0];
+        if (repoBiggestAssignee)
+            lines.push(`- Biggest PRs total (assignee): ${repoBiggestAssignee[0]} (${repoBiggestAssignee[1]} LOC)`);
         if (bucket.topAdd) lines.push(`- Most additions: ${bucket.topAdd.additions} — ${prLabel(bucket.topAdd)}`);
         if (bucket.topDel) lines.push(`- Most deletions: ${bucket.topDel.deletions} — ${prLabel(bucket.topDel)}`);
         if (bucket.topFiles)
@@ -206,6 +280,24 @@ export async function analyze(): Promise<void> {
         if (rAdd) lines.push(`- File additions: ${rAdd[0]} (${rAdd[1].additions})`);
         if (rDel) lines.push(`- File deletions: ${rDel[0]} (${rDel[1].deletions})`);
         if (rPRs) lines.push(`- File PRs touching: ${rPRs[0]} (${rPRs[1].prs})`);
+        const anyBucket: any = bucket as any;
+        const rBiggestTotal = anyBucket.reviewLocTotalByUser
+            ? [...anyBucket.reviewLocTotalByUser.entries()].sort((a: any, b: any) => b[1] - a[1])[0]
+            : undefined;
+        const rBiggestSingle = anyBucket.reviewMaxLocByUser
+            ? [...anyBucket.reviewMaxLocByUser.entries()].sort((a: any, b: any) => b[1].loc - a[1].loc)[0]
+            : undefined;
+        if (rBiggestTotal)
+            lines.push(`- Biggest reviews total: ${rBiggestTotal[0]} (${rBiggestTotal[1]} LOC reviewed)`);
+        if (rBiggestSingle) {
+            const pr = rBiggestSingle[1].pr;
+            const assignees = (pr.assignees || []).map((a: any) => a?.login || "unknown");
+            const assigneesStr =
+                assignees.length > 1 ? `Assignees: ${assignees.join(", ")}` : `Assignee: ${assignees[0]}`;
+            lines.push(
+                `- Biggest single review: ${rBiggestSingle[0]} (${rBiggestSingle[1].loc} LOC, ${assigneesStr}) — ${prLabel(pr)}`
+            );
+        }
         lines.push("");
     }
 
