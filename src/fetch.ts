@@ -41,7 +41,7 @@ export async function fetchCounts({
                 "--search",
                 search,
                 "--json",
-                "additions,assignees,author,changedFiles,number,title,deletions,files,latestReviews,url",
+                "additions,assignees,author,changedFiles,number,title,deletions,files,latestReviews,url,createdAt,mergedAt",
                 "-L",
                 String(limit),
             ]);

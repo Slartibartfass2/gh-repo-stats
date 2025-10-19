@@ -9,6 +9,8 @@ export interface PullRequest {
     files: ChangedFile[];
     latestReviews: Review[];
     url: string;
+    createdAt: string;
+    mergedAt: string;
 }
 
 export interface Author {

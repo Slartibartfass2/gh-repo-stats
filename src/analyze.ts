@@ -140,6 +140,37 @@ export async function analyze(): Promise<void> {
     const topPairEntry = [...pairCounts.entries()].sort((a, b) => b[1] - a[1])[0];
     const topPair = topPairEntry ? { users: topPairEntry[0].split("|"), count: topPairEntry[1] } : undefined;
 
+    // Lead time to merge (mergedAt - createdAt)
+    const parseLeadMs = (pr: PullRequest): number | undefined => {
+        if (!pr.createdAt || !pr.mergedAt) return undefined;
+        const created = Date.parse(pr.createdAt);
+        const merged = Date.parse(pr.mergedAt);
+        if (!isFinite(created) || !isFinite(merged)) return undefined;
+        const ms = merged - created;
+        return ms >= 0 ? ms : undefined;
+    };
+    const humanizeDuration = (ms: number): string => {
+        const secTotal = Math.floor(ms / 1000);
+        const days = Math.floor(secTotal / 86400);
+        const hours = Math.floor((secTotal % 86400) / 3600);
+        const minutes = Math.floor((secTotal % 3600) / 60);
+        const seconds = secTotal % 60;
+        const parts: string[] = [];
+        if (days) parts.push(`${days}d`);
+        if (hours || days) parts.push(`${hours}h`);
+        if (minutes || hours || days) parts.push(`${minutes}m`);
+        if (!days && !hours && minutes === 0) parts.push(`${seconds}s`);
+        return parts.join(" ");
+    };
+    type LeadStat = { pr: PRWithRepo; ms: number } | undefined;
+    const overallLead: { shortest: LeadStat; longest: LeadStat } = { shortest: undefined, longest: undefined };
+    for (const pr of all) {
+        const ms = parseLeadMs(pr);
+        if (ms == null) continue;
+        if (!overallLead.shortest || ms < overallLead.shortest.ms) overallLead.shortest = { pr, ms };
+        if (!overallLead.longest || ms > overallLead.longest.ms) overallLead.longest = { pr, ms };
+    }
+
     // Per-repo aggregation
     const byRepo = new Map<string, RepoBucket>();
 
@@ -227,6 +258,14 @@ export async function analyze(): Promise<void> {
     if (topPair) lines.push(`### Top author-reviewer pair\n`);
     if (topPair) lines.push(`- ${topPair.users[0]} & ${topPair.users[1]} (${topPair.count} reviews)`);
 
+    // Lead time section (overall)
+    lines.push("");
+    lines.push(`### Lead time to merge (overall)\n`);
+    if (overallLead.shortest)
+        lines.push(`- Shortest: ${humanizeDuration(overallLead.shortest.ms)} — ${prLabel(overallLead.shortest.pr)}`);
+    if (overallLead.longest)
+        lines.push(`- Longest: ${humanizeDuration(overallLead.longest.ms)} — ${prLabel(overallLead.longest.pr)}`);
+
     // Biggest reviews (overall)
     lines.push("");
     lines.push(`### Biggest reviews (overall by LOC)\n`);
@@ -257,6 +296,19 @@ export async function analyze(): Promise<void> {
         const topReviewer = [...bucket.reviewCountByUser.entries()].sort((a, b) => b[1] - a[1])[0];
         if (topAssignee) lines.push(`- Most PRs: ${topAssignee[0]} (${topAssignee[1]})`);
         if (topReviewer) lines.push(`- Most reviews: ${topReviewer[0]} (${topReviewer[1]})`);
+        // Lead time per repo
+        let repoShortest: LeadStat = undefined;
+        let repoLongest: LeadStat = undefined;
+        for (const pr of bucket.prs) {
+            const ms = parseLeadMs(pr);
+            if (ms == null) continue;
+            if (!repoShortest || ms < repoShortest.ms) repoShortest = { pr, ms };
+            if (!repoLongest || ms > repoLongest.ms) repoLongest = { pr, ms };
+        }
+        if (repoShortest)
+            lines.push(`- Shortest lead time: ${humanizeDuration(repoShortest.ms)} — ${prLabel(repoShortest.pr)}`);
+        if (repoLongest)
+            lines.push(`- Longest lead time: ${humanizeDuration(repoLongest.ms)} — ${prLabel(repoLongest.pr)}`);
         // Biggest PRs total as assignee (per repo)
         const assigneeLocMap = new Map<string, number>();
         for (const pr of bucket.prs) {
