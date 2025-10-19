@@ -1,0 +1,25 @@
+{
+    "name": "gh-stats",
+    "version": "1.0.0",
+    "description": "",
+    "main": "dist/pr-stats.js",
+    "bin": {
+        "pr-stats": "dist/pr-stats.js"
+    },
+    "scripts": {
+        "build": "tsc -p .",
+        "start": "tsx src/pr-stats.ts",
+        "format": "prettier --write .",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "GPL-3.0-only",
+    "type": "commonjs",
+    "devDependencies": {
+        "@types/node": "^24.8.1",
+        "prettier": "^3.6.2",
+        "tsx": "^4.20.6",
+        "typescript": "^5.9.3"
+    }
+}
