@@ -2,6 +2,7 @@ import * as fs from "fs";
 import { promises as fsp } from "fs";
 import * as path from "path";
 import { PullRequest } from "./pr-data";
+import { loadIgnoreRules, shouldIgnoreFile } from "./ignore";
 
 type PRWithRepo = PullRequest & { __repo: string };
 type FileAgg = { additions: number; deletions: number; prs: number };
@@ -17,6 +18,7 @@ type RepoBucket = {
 };
 
 export async function analyze(): Promise<void> {
+    const ignoreRules = loadIgnoreRules();
     const statsDir = path.resolve(process.cwd(), "stats");
     if (!fs.existsSync(statsDir)) {
         console.error(`No stats directory found at ${statsDir}. Run 'npm start -- fetch' first.`);
@@ -68,6 +70,21 @@ export async function analyze(): Promise<void> {
     const reviewLocTotalByUser = new Map<string, number>();
     const reviewMaxLocByUser = new Map<string, { loc: number; pr: PRWithRepo }>();
     for (const pr of all) {
+        // Helper to compute PR LOC based only on non-ignored files if files array is present;
+        // otherwise fall back to additions+deletions totals.
+        const effectivePrLoc = (() => {
+            if (Array.isArray(pr.files) && pr.files.length > 0) {
+                let add = 0,
+                    del = 0;
+                for (const f of pr.files) {
+                    if (shouldIgnoreFile(pr.__repo, f.path, ignoreRules)) continue;
+                    add += f.additions || 0;
+                    del += f.deletions || 0;
+                }
+                return add + del;
+            }
+            return (pr.additions || 0) + (pr.deletions || 0);
+        })();
         const prLoc = (pr.additions || 0) + (pr.deletions || 0);
         const reviewersInThisPR = new Set<string>();
         for (const rv of pr.latestReviews || []) {
@@ -76,9 +93,9 @@ export async function analyze(): Promise<void> {
             // dedupe LOC accumulation per reviewer per PR
             if (!reviewersInThisPR.has(key)) {
                 reviewersInThisPR.add(key);
-                reviewLocTotalByUser.set(key, (reviewLocTotalByUser.get(key) || 0) + prLoc);
+                reviewLocTotalByUser.set(key, (reviewLocTotalByUser.get(key) || 0) + effectivePrLoc);
                 const prev = reviewMaxLocByUser.get(key);
-                if (!prev || prLoc > prev.loc) reviewMaxLocByUser.set(key, { loc: prLoc, pr });
+                if (!prev || effectivePrLoc > prev.loc) reviewMaxLocByUser.set(key, { loc: effectivePrLoc, pr });
             }
         }
     }
@@ -86,10 +103,22 @@ export async function analyze(): Promise<void> {
     const biggestReviewerTotal = [...reviewLocTotalByUser.entries()].sort((a, b) => b[1] - a[1])[0];
     const biggestReviewerSingle = [...reviewMaxLocByUser.entries()].sort((a, b) => b[1].loc - a[1].loc)[0];
 
-    // Biggest PRs total as assignee (overall, by LOC)
+    // Biggest PRs total as assignee (overall, by LOC) respecting ignore rules
     const assigneeLocTotalByUser = new Map<string, number>();
     for (const pr of all) {
-        const prLoc = (pr.additions || 0) + (pr.deletions || 0);
+        const prLoc = (() => {
+            if (Array.isArray(pr.files) && pr.files.length > 0) {
+                let add = 0,
+                    del = 0;
+                for (const f of pr.files) {
+                    if (shouldIgnoreFile(pr.__repo, f.path, ignoreRules)) continue;
+                    add += f.additions || 0;
+                    del += f.deletions || 0;
+                }
+                return add + del;
+            }
+            return (pr.additions || 0) + (pr.deletions || 0);
+        })();
         for (const a of pr.assignees || []) {
             const key = a?.login ?? "unknown";
             assigneeLocTotalByUser.set(key, (assigneeLocTotalByUser.get(key) || 0) + prLoc);
@@ -97,11 +126,50 @@ export async function analyze(): Promise<void> {
     }
     const biggestAssigneeTotal = [...assigneeLocTotalByUser.entries()].sort((a, b) => b[1] - a[1])[0];
 
-    // PR with most changes
-    const mostAdditions = all.reduce<PRWithRepo>((max, pr) => (pr.additions > max.additions ? pr : max), all[0]!);
-    const mostDeletions = all.reduce<PRWithRepo>((max, pr) => (pr.deletions > max.deletions ? pr : max), all[0]!);
+    // Helpers to compute effective metrics with ignore rules
+    const effectiveAdds = (pr: PRWithRepo): number => {
+        if (Array.isArray(pr.files) && pr.files.length > 0) {
+            let add = 0;
+            for (const f of pr.files) {
+                if (shouldIgnoreFile(pr.__repo, f.path, ignoreRules)) continue;
+                add += f.additions || 0;
+            }
+            return add;
+        }
+        return pr.additions || 0;
+    };
+    const effectiveDels = (pr: PRWithRepo): number => {
+        if (Array.isArray(pr.files) && pr.files.length > 0) {
+            let del = 0;
+            for (const f of pr.files) {
+                if (shouldIgnoreFile(pr.__repo, f.path, ignoreRules)) continue;
+                del += f.deletions || 0;
+            }
+            return del;
+        }
+        return pr.deletions || 0;
+    };
+    const effectiveChanged = (pr: PRWithRepo): number => {
+        if (Array.isArray(pr.files) && pr.files.length > 0) {
+            let count = 0;
+            for (const f of pr.files) {
+                if (shouldIgnoreFile(pr.__repo, f.path, ignoreRules)) continue;
+                count += 1;
+            }
+            return count;
+        }
+        return pr.changedFiles || 0;
+    };
+    const mostAdditions = all.reduce<PRWithRepo>(
+        (max, pr) => (effectiveAdds(pr) > effectiveAdds(max) ? pr : max),
+        all[0]!
+    );
+    const mostDeletions = all.reduce<PRWithRepo>(
+        (max, pr) => (effectiveDels(pr) > effectiveDels(max) ? pr : max),
+        all[0]!
+    );
     const mostChangedFiles = all.reduce<PRWithRepo>(
-        (max, pr) => (pr.changedFiles > max.changedFiles ? pr : max),
+        (max, pr) => (effectiveChanged(pr) > effectiveChanged(max) ? pr : max),
         all[0]!
     );
 
@@ -110,6 +178,7 @@ export async function analyze(): Promise<void> {
     for (const pr of all) {
         const seenInThisPr = new Set<string>();
         for (const f of pr.files || []) {
+            if (shouldIgnoreFile(pr.__repo, f.path, ignoreRules)) continue;
             const key = f.path;
             const cur = fileAgg.get(key) || { additions: 0, deletions: 0, prs: 0 };
             cur.additions += f.additions || 0;
@@ -196,7 +265,19 @@ export async function analyze(): Promise<void> {
             bucket.prCountByAssignee.set(k, (bucket.prCountByAssignee.get(k) || 0) + 1);
         }
         // reviews count + biggest reviews per repo (by LOC)
-        const prLoc = (pr.additions || 0) + (pr.deletions || 0);
+        const prLoc = (() => {
+            if (Array.isArray(pr.files) && pr.files.length > 0) {
+                let add = 0,
+                    del = 0;
+                for (const f of pr.files) {
+                    if (shouldIgnoreFile(pr.__repo, f.path, ignoreRules)) continue;
+                    add += f.additions || 0;
+                    del += f.deletions || 0;
+                }
+                return add + del;
+            }
+            return (pr.additions || 0) + (pr.deletions || 0);
+        })();
         const seenReviewers = new Set<string>();
         // lazy init maps on bucket as any additions
         const anyBucket: any = bucket as any;
@@ -216,6 +297,7 @@ export async function analyze(): Promise<void> {
         // file agg
         const seen = new Set<string>();
         for (const f of pr.files || []) {
+            if (shouldIgnoreFile(pr.__repo, f.path, ignoreRules)) continue;
             const k = f.path;
             const cur = bucket.fileAgg.get(k) || { additions: 0, deletions: 0, prs: 0 };
             cur.additions += f.additions || 0;
@@ -226,10 +308,11 @@ export async function analyze(): Promise<void> {
             }
             bucket.fileAgg.set(k, cur);
         }
-        // tops
-        bucket.topAdd = !bucket.topAdd || pr.additions > bucket.topAdd.additions ? pr : bucket.topAdd;
-        bucket.topDel = !bucket.topDel || pr.deletions > bucket.topDel.deletions ? pr : bucket.topDel;
-        bucket.topFiles = !bucket.topFiles || pr.changedFiles > bucket.topFiles.changedFiles ? pr : bucket.topFiles;
+        // tops using effective metrics with ignore rules
+        bucket.topAdd = !bucket.topAdd || effectiveAdds(pr) > effectiveAdds(bucket.topAdd) ? pr : bucket.topAdd;
+        bucket.topDel = !bucket.topDel || effectiveDels(pr) > effectiveDels(bucket.topDel) ? pr : bucket.topDel;
+        bucket.topFiles =
+            !bucket.topFiles || effectiveChanged(pr) > effectiveChanged(bucket.topFiles) ? pr : bucket.topFiles;
 
         byRepo.set(pr.__repo, bucket);
     }
@@ -245,10 +328,10 @@ export async function analyze(): Promise<void> {
     const prLabel = (pr: PRWithRepo | PullRequest) => `${(pr as any).title} ([#${pr.number}](${pr.url}))`;
     lines.push("");
     lines.push(`### PRs with most changes\n`);
-    if (mostAdditions) lines.push(`- Additions: ${mostAdditions.additions} — ${prLabel(mostAdditions)}`);
-    if (mostDeletions) lines.push(`- Deletions: ${mostDeletions.deletions} — ${prLabel(mostDeletions)}`);
+    if (mostAdditions) lines.push(`- Additions: ${effectiveAdds(mostAdditions)} — ${prLabel(mostAdditions)}`);
+    if (mostDeletions) lines.push(`- Deletions: ${effectiveDels(mostDeletions)} — ${prLabel(mostDeletions)}`);
     if (mostChangedFiles)
-        lines.push(`- Changed files: ${mostChangedFiles.changedFiles} — ${prLabel(mostChangedFiles)}`);
+        lines.push(`- Changed files: ${effectiveChanged(mostChangedFiles)} — ${prLabel(mostChangedFiles)}`);
     lines.push("");
     lines.push(`### Files with most changes\n`);
     if (topByAdditions) lines.push(`- Additions: ${topByAdditions[0]} (${topByAdditions[1].additions})`);
@@ -309,10 +392,22 @@ export async function analyze(): Promise<void> {
             lines.push(`- Shortest lead time: ${humanizeDuration(repoShortest.ms)} — ${prLabel(repoShortest.pr)}`);
         if (repoLongest)
             lines.push(`- Longest lead time: ${humanizeDuration(repoLongest.ms)} — ${prLabel(repoLongest.pr)}`);
-        // Biggest PRs total as assignee (per repo)
+        // Biggest PRs total as assignee (per repo) respecting ignore rules
         const assigneeLocMap = new Map<string, number>();
         for (const pr of bucket.prs) {
-            const prLoc = (pr.additions || 0) + (pr.deletions || 0);
+            const prLoc = (() => {
+                if (Array.isArray(pr.files) && pr.files.length > 0) {
+                    let add = 0,
+                        del = 0;
+                    for (const f of pr.files) {
+                        if (shouldIgnoreFile(pr.__repo, f.path, ignoreRules)) continue;
+                        add += f.additions || 0;
+                        del += f.deletions || 0;
+                    }
+                    return add + del;
+                }
+                return (pr.additions || 0) + (pr.deletions || 0);
+            })();
             for (const a of pr.assignees || []) {
                 const key = a?.login ?? "unknown";
                 assigneeLocMap.set(key, (assigneeLocMap.get(key) || 0) + prLoc);
@@ -321,10 +416,10 @@ export async function analyze(): Promise<void> {
         const repoBiggestAssignee = [...assigneeLocMap.entries()].sort((a, b) => b[1] - a[1])[0];
         if (repoBiggestAssignee)
             lines.push(`- Biggest PRs total (assignee): ${repoBiggestAssignee[0]} (${repoBiggestAssignee[1]} LOC)`);
-        if (bucket.topAdd) lines.push(`- Most additions: ${bucket.topAdd.additions} — ${prLabel(bucket.topAdd)}`);
-        if (bucket.topDel) lines.push(`- Most deletions: ${bucket.topDel.deletions} — ${prLabel(bucket.topDel)}`);
+        if (bucket.topAdd) lines.push(`- Most additions: ${effectiveAdds(bucket.topAdd)} — ${prLabel(bucket.topAdd)}`);
+        if (bucket.topDel) lines.push(`- Most deletions: ${effectiveDels(bucket.topDel)} — ${prLabel(bucket.topDel)}`);
         if (bucket.topFiles)
-            lines.push(`- Most changed files: ${bucket.topFiles.changedFiles} — ${prLabel(bucket.topFiles)}`);
+            lines.push(`- Most changed files: ${effectiveChanged(bucket.topFiles)} — ${prLabel(bucket.topFiles)}`);
         const fa = bucket.fileAgg;
         const rAdd = [...fa.entries()].sort((a, b) => b[1].additions - a[1].additions)[0];
         const rDel = [...fa.entries()].sort((a, b) => b[1].deletions - a[1].deletions)[0];

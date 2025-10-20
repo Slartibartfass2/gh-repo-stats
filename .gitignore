@@ -2,3 +2,4 @@ stats/
 node_modules/
 dist/
 .env
+ignore.rules.json

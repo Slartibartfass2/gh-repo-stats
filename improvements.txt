@@ -1,0 +1,74 @@
+Great question. Here are high‑value stats you can add, split by what we can compute right now with your current data versus what would require adding more fields in the fetch step.
+
+## can do now (no new data)
+
+- PR size distribution
+  - Overall and per repo: median, p75, p90 of LOC per PR (additions + deletions) and changed files.
+  - Top 10 largest PRs by LOC and by changed files.
+
+- Assignee load and intensity
+  - Total and average LOC per assignee (overall and per repo).
+  - “Heaviest average PRs” by assignee (min N PRs to avoid outliers).
+  - Net change per assignee (additions − deletions).
+
+- Reviewer load quality
+  - Average LOC per reviewed PR per reviewer (we have total approvals; compute average LOC credited to them).
+  - PRs with most approvers (count of latestReviews).
+
+- Growth per repository
+  - Total additions, deletions, and net (Δ LOC) per repo.
+  - Ratio additions:deletions as a rough proxy for growth vs refactor.
+
+- File and directory hotspots
+  - Top files by total additions/deletions/PRs (you already have pieces).
+  - Top directories by total additions/deletions/PRs (aggregate by dirname).
+  - Extension breakdown (e.g., .kt vs .ts vs .svelte): LOC and PR counts.
+
+- File ownership and bus factor
+  - For each file: top assignee by PR count and bus factor (number of distinct assignees touching it).
+  - Same at directory level.
+
+- Change coupling
+  - Top file pairs that frequently change together (co-change count). Useful to spot implicit coupling.
+  - Optional flag to cap complexity (only consider files touched in ≤ K PRs; and only pairs within PRs with ≤ M files).
+
+- “Spiky” changes
+  - Largest single file change within a PR (by LOC).
+  - PRs where a single file accounts for > X% of total LOC changes.
+
+- Sanity checks
+  - PRs with zero approvals (should be rare; indicates admin merges).
+  - PRs with extraordinarily high changed files relative to LOC (potentially mass renames or moves).
+
+## needs extra fields in fetch (recommended extensions)
+
+- Throughput and review latency
+  - Time to first approval (first review submittedAt − createdAt).
+  - Time from last approval to merge (merge efficiency).
+  - Requires: createdAt, mergedAt, and review submittedAt timestamps.
+
+- Review depth and collaboration
+  - Comments per review/PR (vs just approvals).
+  - Distinguish “drive-by” approvals vs detailed reviews (based on comment count).
+  - Requires: review body/comment counts, or review comments.
+
+- Work patterns
+  - Activity by day/hour; weekday vs weekend merges/reviews.
+  - Requires: timestamps as above.
+
+- Scope and risk markers
+  - Labels (e.g., feature/bug/refactor), draft state, merge method (squash/rebase/merge).
+  - Requires: labels, isDraft, mergeCommit/mergeMethod.
+
+- Open PR health
+  - Current open PRs, age distribution, stale PRs.
+  - Requires querying open state (separate fetch).
+
+## reporting enhancements
+
+- Markdown tables for top-N lists and per-repo breakdowns for readability.
+- Configurable “Top N” limit via env (e.g., TOP_N=10).
+- Optional JSON export alongside Stats.md for downstream use.
+- Guard rails for heavy computations (co-change) with env flags (e.g., ENABLE_COUPLING=true, MAX_FILES_PER_PR=50).
+
+If you tell me which of the “can do now” you want first, I can wire them into Stats.md quickly and keep the runtime under control with sensible caps. For the latency/throughput metrics, I can extend the fetch to include `createdAt`, `mergedAt`, and review `submittedAt`, then add those analyses next.

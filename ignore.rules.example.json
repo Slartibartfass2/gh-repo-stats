@@ -1,0 +1,10 @@
+{
+    "*": {
+        "extensions": [".lock", ".svg"],
+        "pathPrefixes": ["docs/"]
+    },
+    "owner/repo": {
+        "extensions": [".svg"],
+        "pathPrefixes": ["wiki/"]
+    }
+}
