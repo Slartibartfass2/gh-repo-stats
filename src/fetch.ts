@@ -22,7 +22,6 @@ export async function fetchCounts({
     limit,
 }: {
     repos: string[];
-    users: string[];
     since: string;
     limit: number;
 }): Promise<void> {

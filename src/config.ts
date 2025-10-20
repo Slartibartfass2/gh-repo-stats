@@ -12,20 +12,17 @@ function csvToArray(val: string | undefined): string[] {
 
 export interface Options {
     repos: string[];
-    users: string[];
     since: string;
     limit: number;
 }
 
 export function loadOptions(): Options {
     const repos = csvToArray(process.env.REPOS);
-    const users = csvToArray(process.env.USERS);
     const since = process.env.SINCE;
     const limitEnv = process.env.LIMIT;
 
     const errors: string[] = [];
     if (!repos.length) errors.push("REPOS must be set (comma-separated list)");
-    if (!users.length) errors.push("USERS must be set (comma-separated list)");
     if (!since) errors.push("SINCE must be set (YYYY-MM-DD)");
     const limit = Number(limitEnv);
     if (!limitEnv || !Number.isFinite(limit) || limit <= 0) errors.push("LIMIT must be a positive integer");
@@ -37,7 +34,6 @@ export function loadOptions(): Options {
 
     return {
         repos,
-        users,
         since: since!,
         limit,
     };
