@@ -10,6 +10,8 @@
         "build": "tsc -p .",
         "start": "tsx src/pr-stats.ts",
         "format": "prettier --write .",
+        "lint": "eslint src --ext .ts",
+        "lint:fix": "eslint src --ext .ts --fix",
         "test": "echo \"Error: no test specified\" && exit 1"
     },
     "keywords": [],
@@ -18,7 +20,16 @@
     "type": "commonjs",
     "devDependencies": {
         "@types/node": "^24.8.1",
+        "@typescript-eslint/eslint-plugin": "^8.10.0",
+        "@typescript-eslint/parser": "^8.10.0",
+        "typescript-eslint": "^8.10.0",
         "dotenv": "^17.2.3",
+        "eslint": "^9.13.0",
+        "eslint-config-prettier": "^9.1.0",
+        "eslint-import-resolver-typescript": "^3.6.3",
+        "eslint-plugin-import": "^2.31.0",
+        "eslint-plugin-prettier": "^5.2.1",
+        "eslint-plugin-unused-imports": "^4.1.4",
         "prettier": "^3.6.2",
         "tsx": "^4.20.6",
         "typescript": "^5.9.3"
