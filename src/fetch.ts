@@ -3,12 +3,22 @@ import * as path from "path";
 import { promises as fsp } from "fs";
 import { authorToAssignee, isAuthorBot, PullRequest } from "./pr-data";
 
+class GhError extends Error {
+    constructor(
+        message: string,
+        public stderr?: string
+    ) {
+        super(message);
+        this.name = "GhError";
+    }
+}
+
 function runGh(args: string[], options: { cwd?: string } = {}): Promise<string> {
     return new Promise((resolve, reject) => {
         const child = execFile("gh", args, { windowsHide: true, ...options }, (err, stdout, stderr) => {
             if (err) {
-                (err as any).stderr = stderr;
-                return reject(err);
+                const message = `gh command failed: ${String(stderr).trim() || (err as Error).message}`;
+                return reject(new GhError(message, stderr?.toString()));
             }
             resolve(stdout.toString().trim());
         });
@@ -62,9 +72,9 @@ export async function fetchCounts({
             await fsp.mkdir(statsDir, { recursive: true });
             const filePath = path.join(statsDir, `pr-data-${repo.replaceAll("/", "_")}.json`);
             await fsp.writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
-        } catch (err: any) {
+        } catch (err: unknown) {
             process.stdout.write(`ERR\n`);
-            if (err && err.stderr) {
+            if (err instanceof GhError && err.stderr) {
                 process.stdout.write(`gh error: ${String(err.stderr).split("\n")[0]}\n`);
             }
         }

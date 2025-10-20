@@ -247,7 +247,7 @@ export async function analyze(): Promise<void> {
             byRepo.set(pr.__repo, bucket);
         }
         // accumulate effective LOC per repo and track largest PR
-        const prEffectiveLoc = effectiveLoc(pr as PRWithRepo);
+        const prEffectiveLoc = effectiveLoc(pr);
         bucket.totalLoc = (bucket.totalLoc || 0) + prEffectiveLoc;
         bucket.prs.push(pr);
         // assignees count
@@ -311,7 +311,7 @@ export async function analyze(): Promise<void> {
     // Assignee LOC stats overall: total and count (number of PRs assigned)
     const assigneeStats = new Map<string, { total: number; count: number }>();
     for (const pr of all) {
-        const prLoc = effectiveLoc(pr as PRWithRepo);
+        const prLoc = effectiveLoc(pr);
         for (const a of pr.assignees || []) {
             const key = a?.login ?? "unknown";
             const cur = assigneeStats.get(key) || { total: 0, count: 0 };

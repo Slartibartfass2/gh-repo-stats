@@ -17,7 +17,7 @@ function parseArgs(argv: string[]): Argv {
                 : [a.slice(2), argv[i + 1]?.startsWith("--") ? "true" : (argv[++i] as string)];
             (args as any)[k] = v === undefined ? true : v;
         } else {
-            args._.push(a as string);
+            args._.push(a);
         }
     }
     return args;
@@ -29,11 +29,11 @@ function printHelp(): void {
     );
 }
 
-(async () => {
+void (async () => {
     const argv = parseArgs(process.argv);
     const cmd = argv._[0];
 
-    if (!cmd || cmd === "help" || (argv as any).help || (argv as any).h) {
+    if (!cmd || cmd === "help" || (argv as Record<string, unknown>).help || (argv as Record<string, unknown>).h) {
         printHelp();
         return;
     }
@@ -42,8 +42,9 @@ function printHelp(): void {
         try {
             const opts = loadOptions();
             await fetchCounts(opts);
-        } catch (e: any) {
-            console.error(e.message || String(e));
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error(msg);
             process.exitCode = 1;
         }
         return;
