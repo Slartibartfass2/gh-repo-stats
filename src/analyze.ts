@@ -15,6 +15,7 @@ type RepoBucket = {
     topFiles?: PRWithRepo;
     fileAgg: Map<string, FileAgg>;
     topPair?: { users: string[]; count: number };
+    totalLoc?: number;
 };
 
 export async function analyze(): Promise<void> {
@@ -85,7 +86,6 @@ export async function analyze(): Promise<void> {
             }
             return (pr.additions || 0) + (pr.deletions || 0);
         })();
-        const prLoc = (pr.additions || 0) + (pr.deletions || 0);
         const reviewersInThisPR = new Set<string>();
         for (const rv of pr.latestReviews || []) {
             const key = rv.author?.login ?? "unknown";
@@ -102,29 +102,6 @@ export async function analyze(): Promise<void> {
     const mostReviews = [...reviewCountByUser.entries()].sort((a, b) => b[1] - a[1])[0];
     const biggestReviewerTotal = [...reviewLocTotalByUser.entries()].sort((a, b) => b[1] - a[1])[0];
     const biggestReviewerSingle = [...reviewMaxLocByUser.entries()].sort((a, b) => b[1].loc - a[1].loc)[0];
-
-    // Biggest PRs total as assignee (overall, by LOC) respecting ignore rules
-    const assigneeLocTotalByUser = new Map<string, number>();
-    for (const pr of all) {
-        const prLoc = (() => {
-            if (Array.isArray(pr.files) && pr.files.length > 0) {
-                let add = 0,
-                    del = 0;
-                for (const f of pr.files) {
-                    if (shouldIgnoreFile(pr.__repo, f.path, ignoreRules)) continue;
-                    add += f.additions || 0;
-                    del += f.deletions || 0;
-                }
-                return add + del;
-            }
-            return (pr.additions || 0) + (pr.deletions || 0);
-        })();
-        for (const a of pr.assignees || []) {
-            const key = a?.login ?? "unknown";
-            assigneeLocTotalByUser.set(key, (assigneeLocTotalByUser.get(key) || 0) + prLoc);
-        }
-    }
-    const biggestAssigneeTotal = [...assigneeLocTotalByUser.entries()].sort((a, b) => b[1] - a[1])[0];
 
     // Helpers to compute effective metrics with ignore rules
     const effectiveAdds = (pr: PRWithRepo): number => {
@@ -159,6 +136,11 @@ export async function analyze(): Promise<void> {
             return count;
         }
         return pr.changedFiles || 0;
+    };
+
+    // Compute effective LOC helper (adds + dels across non-ignored files when available)
+    const effectiveLoc = (pr: PRWithRepo): number => {
+        return effectiveAdds(pr) + effectiveDels(pr);
     };
     const mostAdditions = all.reduce<PRWithRepo>(
         (max, pr) => (effectiveAdds(pr) > effectiveAdds(max) ? pr : max),
@@ -231,6 +213,12 @@ export async function analyze(): Promise<void> {
         if (!days && !hours && minutes === 0) parts.push(`${seconds}s`);
         return parts.join(" ");
     };
+
+    // Overall LOC metrics (per-PR, not per-assignee)
+    const effectiveLocs = all.map((pr) => effectiveLoc(pr));
+    const totalLocAll = effectiveLocs.reduce((s, v) => s + v, 0);
+    const avgLocAll = effectiveLocs.length > 0 ? Math.round(totalLocAll / effectiveLocs.length) : 0;
+
     type LeadStat = { pr: PRWithRepo; ms: number } | undefined;
     const overallLead: { shortest: LeadStat; longest: LeadStat } = { shortest: undefined, longest: undefined };
     for (const pr of all) {
@@ -258,6 +246,9 @@ export async function analyze(): Promise<void> {
             } as RepoBucket;
             byRepo.set(pr.__repo, bucket);
         }
+        // accumulate effective LOC per repo and track largest PR
+        const prEffectiveLoc = effectiveLoc(pr as PRWithRepo);
+        bucket.totalLoc = (bucket.totalLoc || 0) + prEffectiveLoc;
         bucket.prs.push(pr);
         // assignees count
         for (const a of pr.assignees) {
@@ -317,6 +308,20 @@ export async function analyze(): Promise<void> {
         byRepo.set(pr.__repo, bucket);
     }
 
+    // Assignee LOC stats overall: total and count (number of PRs assigned)
+    const assigneeStats = new Map<string, { total: number; count: number }>();
+    for (const pr of all) {
+        const prLoc = effectiveLoc(pr as PRWithRepo);
+        for (const a of pr.assignees || []) {
+            const key = a?.login ?? "unknown";
+            const cur = assigneeStats.get(key) || { total: 0, count: 0 };
+            cur.total += prLoc;
+            cur.count += 1;
+            assigneeStats.set(key, cur);
+        }
+    }
+    const biggestAssigneeTotal = [...assigneeStats.entries()].sort((a, b) => b[1].total - a[1].total)[0];
+
     // Build Markdown report
     const lines: string[] = [];
     lines.push(`# Repository Stats\n`);
@@ -325,7 +330,22 @@ export async function analyze(): Promise<void> {
     lines.push(`## Overall\n`);
     if (mostPRs) lines.push(`- Most PRs: ${mostPRs[0]} (${mostPRs[1]})`);
     if (mostReviews) lines.push(`- Most reviews: ${mostReviews[0]} (${mostReviews[1]})`);
+    // Assignee totals and averages overall
+    const assigneeOverallSorted = [...assigneeStats.entries()].sort((a, b) => b[1].total - a[1].total);
+    if (assigneeOverallSorted.length > 0) {
+        lines.push("\n### Assignee LOC (overall)\n");
+        for (const [user, stats] of assigneeOverallSorted) {
+            const avg = stats.count > 0 ? Math.round(stats.total / stats.count) : 0;
+            lines.push(`- ${user}: ${stats.total} LOC total, ${stats.count} PRs, avg ${avg} LOC/PR`);
+        }
+    }
     const prLabel = (pr: PRWithRepo | PullRequest) => `${(pr as any).title} ([#${pr.number}](${pr.url}))`;
+    lines.push("");
+    // Overall LOC summary
+    lines.push(`### LOC per PR (overall)\n`);
+    lines.push(`- Total LOC (effective): ${totalLocAll}`);
+    lines.push(`- Average LOC per PR: ${avgLocAll}`);
+    // intentionally no "largest PR by LOC" overall line (removed by request)
     lines.push("");
     lines.push(`### PRs with most changes\n`);
     if (mostAdditions) lines.push(`- Additions: ${effectiveAdds(mostAdditions)} — ${prLabel(mostAdditions)}`);
@@ -367,7 +387,7 @@ export async function analyze(): Promise<void> {
     lines.push("");
     lines.push(`### Biggest PRs total (assignee by LOC)\n`);
     if (biggestAssigneeTotal)
-        lines.push(`- Largest total as assignee: ${biggestAssigneeTotal[0]} (${biggestAssigneeTotal[1]} LOC)`);
+        lines.push(`- Largest total as assignee: ${biggestAssigneeTotal[0]} (${biggestAssigneeTotal[1].total} LOC)`);
 
     // Per-repo sections
     lines.push("");
@@ -379,6 +399,32 @@ export async function analyze(): Promise<void> {
         const topReviewer = [...bucket.reviewCountByUser.entries()].sort((a, b) => b[1] - a[1])[0];
         if (topAssignee) lines.push(`- Most PRs: ${topAssignee[0]} (${topAssignee[1]})`);
         if (topReviewer) lines.push(`- Most reviews: ${topReviewer[0]} (${topReviewer[1]})`);
+        // Per-repo LOC summary
+        if (bucket.totalLoc !== undefined) {
+            const avgRepo = bucket.prs.length > 0 ? Math.round((bucket.totalLoc || 0) / bucket.prs.length) : 0;
+            lines.push(`- Total LOC (effective, repo): ${bucket.totalLoc}`);
+            lines.push(`- Average LOC per PR (repo): ${avgRepo}`);
+        }
+        // Assignee totals & averages per repo
+        const repoAssigneeStats = new Map<string, { total: number; count: number }>();
+        for (const pr of bucket.prs) {
+            const loc = effectiveLoc(pr);
+            for (const a of pr.assignees || []) {
+                const k = a?.login ?? "unknown";
+                const cur = repoAssigneeStats.get(k) || { total: 0, count: 0 };
+                cur.total += loc;
+                cur.count += 1;
+                repoAssigneeStats.set(k, cur);
+            }
+        }
+        const repoAssigneesSorted = [...repoAssigneeStats.entries()].sort((a, b) => b[1].total - a[1].total);
+        if (repoAssigneesSorted.length > 0) {
+            lines.push("\n- Assignee LOC (repo):");
+            for (const [user, stats] of repoAssigneesSorted) {
+                const avg = stats.count > 0 ? Math.round(stats.total / stats.count) : 0;
+                lines.push(`  - ${user}: ${stats.total} LOC total, ${stats.count} PRs, avg ${avg} LOC/PR`);
+            }
+        }
         // Lead time per repo
         let repoShortest: LeadStat = undefined;
         let repoLongest: LeadStat = undefined;
