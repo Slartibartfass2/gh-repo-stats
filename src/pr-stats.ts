@@ -25,7 +25,7 @@ function parseArgs(argv: string[]): Argv {
 
 function printHelp(): void {
     console.log(
-        `Usage: pr-stats <command>\n\nCommands:\n  fetch               Fetch PR data via gh and write JSON per repo in stats/\n  analyze             Analyze previously fetched JSON data\n\nConfiguration:\n  Set environment variables (REPOS, USERS, SINCE, LIMIT). A .env file is supported.\n`
+        `Usage: pr-stats <command>\n\nCommands:\n  fetch               Fetch PR data via gh and write JSON per repo in stats/\n  analyze             Analyze previously fetched JSON data\n\nConfiguration:\n  Set environment variables (REPOS, USERS, FROM, UNTIL, LIMIT). A .env file is supported.\n`
     );
 }
 

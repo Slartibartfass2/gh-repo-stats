@@ -28,14 +28,16 @@ function runGh(args: string[], options: { cwd?: string } = {}): Promise<string> 
 
 export async function fetchCounts({
     repos,
-    since,
+    from,
+    until,
     limit,
 }: {
     repos: string[];
-    since: string;
+    from: string;
+    until: string;
     limit: number;
 }): Promise<void> {
-    const search = `merged:>${since}`;
+    const search = `merged:${from}..${until}`;
 
     for (const repo of repos) {
         process.stdout.write(`Processing repo '${repo}'...\n`);
