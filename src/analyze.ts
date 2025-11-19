@@ -330,6 +330,15 @@ export async function analyze(): Promise<void> {
     lines.push(`## Overall\n`);
     if (mostPRs) lines.push(`- Most PRs: ${mostPRs[0]} (${mostPRs[1]})`);
     if (mostReviews) lines.push(`- Most reviews: ${mostReviews[0]} (${mostReviews[1]})`);
+    // Overall reviews per person
+    const reviewOverallSorted = [...reviewCountByUser.entries()].sort((a, b) => b[1] - a[1]);
+    if (reviewOverallSorted.length > 0) {
+        lines.push("");
+        lines.push("### Reviews per person (overall)\n");
+        for (const [user, cnt] of reviewOverallSorted) {
+            lines.push(`- ${user}: ${cnt} reviews`);
+        }
+    }
     // Assignee totals and averages overall
     const assigneeOverallSorted = [...assigneeStats.entries()].sort((a, b) => b[1].total - a[1].total);
     if (assigneeOverallSorted.length > 0) {
@@ -399,6 +408,15 @@ export async function analyze(): Promise<void> {
         const topReviewer = [...bucket.reviewCountByUser.entries()].sort((a, b) => b[1] - a[1])[0];
         if (topAssignee) lines.push(`- Most PRs: ${topAssignee[0]} (${topAssignee[1]})`);
         if (topReviewer) lines.push(`- Most reviews: ${topReviewer[0]} (${topReviewer[1]})`);
+        // Per-repo reviewers list
+        const repoReviewersSorted = [...bucket.reviewCountByUser.entries()].sort((a, b) => b[1] - a[1]);
+        if (repoReviewersSorted.length > 0) {
+            lines.push("");
+            lines.push("- Reviewers (repo):");
+            for (const [user, cnt] of repoReviewersSorted) {
+                lines.push(`  - ${user}: ${cnt} reviews`);
+            }
+        }
         // Per-repo LOC summary
         if (bucket.totalLoc !== undefined) {
             const avgRepo = bucket.prs.length > 0 ? Math.round((bucket.totalLoc || 0) / bucket.prs.length) : 0;
